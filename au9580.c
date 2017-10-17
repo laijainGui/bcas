@@ -157,7 +157,7 @@ int au9580_slotstatus(void *ctxt, int *present)
         return -1;
     }
 
-    if (rsp[7] == 0) *present = 1;
+    if (rsp[7] == 0 || rsp[7] == 1) *present = 1;
     else *present = 0;
     return 0;
 }
