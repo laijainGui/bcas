@@ -118,7 +118,7 @@ static int send_command(int fd, uint8_t *cmd, int clen, uint8_t *seq, uint8_t *r
 #if DUMP_COMMAND
     printf("-rsp: ");
     for (i=0; i<rlen; i++) {
-        printf("%02x ", rsp[10+i]);
+        printf("%02x ", rsp[i]);
     }
     printf("\n\n");
 #endif
@@ -157,7 +157,7 @@ int au9580_slotstatus(void *ctxt, int *present)
         return -1;
     }
 
-    if ((rsp[6] & 0xc3) == 0) *present = 1;
+    if (rsp[7] == 0) *present = 1;
     else *present = 0;
     return 0;
 }
@@ -216,14 +216,15 @@ int au9580_apdu(void *ctxt, uint8_t *apdu, int alen, uint8_t *rsp, int rlen)
 
 int main(void)
 {
-    void *bcas    = au9580_init("/dev/ttyS2");
+    void *bcas    = au9580_init("/dev/ttyS3");
     int   ret     = 0;
     int   present = 0;
     uint8_t init_apdu_cmd[]   = { 0x90, 0x30, 0x00, 0x00, 0x00 };
     uint8_t init_apdu_rsp[50] = { 0x00 };
-    
+
     while (1) {
         ret = au9580_slotstatus(bcas, &present);
+        printf("ret: %d, present: %d\n", ret, present);
         if (ret == 0 && present == 1) break;
         sleep(1);
     }
