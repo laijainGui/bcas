@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h> 
+#include <unistd.h>
 #include <fcntl.h>
 #include <termios.h>
 #include <errno.h>
@@ -16,6 +16,18 @@ typedef struct {
     int     fd;
     uint8_t seq;
 } CONTEXT;
+
+#pragma pack (1)
+typedef struct {
+    uint8_t  bMsgType;
+    uint32_t dwLength;
+    uint8_t  bSlot;
+    uint8_t  bSeq;
+    uint8_t  bStatus;
+    uint8_t  bError;
+    uint8_t  bRFU;
+} RSPHDR;
+#pragma pack (0)
 
 // º¯ÊýÉùÃ÷
 void* au9580_init (char *dev );
@@ -31,7 +43,7 @@ static int open_serial_port(char *dev)
     struct termios termattr;
     int ret;
 
-    int fd = open(dev, O_RDWR | O_NOCTTY);
+    int fd = open(dev, O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (fd < 0) {
         printf("failed to open serial port: %s !\n", dev);
         return fd;
@@ -56,22 +68,74 @@ static int open_serial_port(char *dev)
     return fd;
 }
 
+static int read_serial_port(int fd, uint8_t *buf, int len)
+{
+    int retry = len;
+    int ret   = -1;
+    int m     = len;
+    int n;
+    while (len > 0 && retry > 0) {
+        n = read(fd, buf, len);
+        if (n < 0) {
+            if (errno == EAGAIN) {
+                retry--;
+                usleep(10000);
+            } else {
+                goto done;
+            }
+        } else {
+            len -= n;
+            buf += n;
+        }
+    }
+
+done:
+    return (m - len);
+}
+
 static int get_response(int fd, uint8_t *rsp, int len, int timeout)
 {
-    fd_set        fds;
+    fd_set         fds;
     struct timeval tv;
+    RSPHDR        *hdr   = (RSPHDR*)rsp;
+    int            total = 0;
+    int            n;
 
     FD_ZERO(&fds);
     FD_SET (fd, &fds);
     tv.tv_sec  = timeout / 1000;
-    tv.tv_usec = timeout * 1000;
+    tv.tv_usec = timeout % 1000 * 1000;
 
     if (select(fd + 1, &fds, NULL, NULL, &tv) <= 0) {
         printf("select error or timeout !\n");
         return -1;
     }
 
-    return read(fd, rsp, len);
+    // 1. check response buffer size
+    if (len < sizeof(RSPHDR)) {
+        printf("invalid respone buffer size, size = %d, wanted = %d !\n", len, sizeof(RSPHDR));
+        return -1;
+    }
+
+    n = read_serial_port(fd, rsp, sizeof(RSPHDR));
+    total += n;
+    if (n != sizeof(RSPHDR)) {
+        printf("read respone header failed !\n");
+        return total;
+    }
+
+    // 2. check response buffer size
+    if (len < sizeof(RSPHDR) + hdr->dwLength + 1) {
+        printf("invalid respone buffer size, size = %d, wanted = %d !\n", len, sizeof(RSPHDR) + hdr->dwLength + 1);
+        return -1;
+    }
+
+    n = read_serial_port(fd, rsp + sizeof(RSPHDR), hdr->dwLength + 1);
+    total += n;
+    if (n != hdr->dwLength + 1) {
+        printf("read respone data failed !\n");
+    }
+    return total;
 }
 
 static int check_lrc(uint8_t *buf, int len)
@@ -99,11 +163,16 @@ static int send_command(int fd, uint8_t *cmd, int clen, uint8_t *seq, uint8_t *r
 #endif
 
     ret = write(fd, cmd, clen);
-    if (ret != clen) return -1;
+    if (ret != clen) {
+        printf("write failed, ret = %d, clen = %d\n", ret, clen);
+        return -1;
+    }
 
-    ret = get_response(fd, rsp, rlen, timeout);
-    if (ret != rlen) return -1;
-
+    rlen = get_response(fd, rsp, rlen, timeout);
+    if (rlen < 0) {
+        printf("get_response failed, rlen: %d%d\n", rlen);
+        return -1;
+    }
 
     if (check_lrc(rsp, rlen) < 0) {
         printf("check respone lrc failed !\n");
@@ -148,11 +217,11 @@ void au9580_close(void *ctxt)
 int au9580_slotstatus(void *ctxt, int *present)
 {
     uint8_t cmd[]    = { 0x65, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-    uint8_t rsp[11]  = {0};
+    uint8_t rsp[64]  = {0};
     CONTEXT *context = (CONTEXT*)ctxt;
     if (!context) return -1;
 
-    if (send_command(context->fd, cmd, sizeof(cmd), &context->seq, rsp, sizeof(rsp), 100) == -1) {
+    if (send_command(context->fd, cmd, sizeof(cmd), &context->seq, rsp, sizeof(rsp), 200) == -1) {
         printf("failed to send command %02x !\n", cmd[0]);
         return -1;
     }
@@ -165,11 +234,11 @@ int au9580_slotstatus(void *ctxt, int *present)
 int au9580_iccpoweron(void *ctxt)
 {
     uint8_t cmd[]    = { 0x62, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-    uint8_t rsp[23]  = {0};
+    uint8_t rsp[64]  = {0};
     CONTEXT *context = (CONTEXT*)ctxt;
     if (!context) return -1;
 
-    if (send_command(context->fd, cmd, sizeof(cmd), &context->seq, rsp, sizeof(rsp), 100) == -1) {
+    if (send_command(context->fd, cmd, sizeof(cmd), &context->seq, rsp, sizeof(rsp), 200) == -1) {
         printf("failed to send command %02x !\n", cmd[0]);
         return -1;
     }
@@ -180,11 +249,11 @@ int au9580_iccpoweron(void *ctxt)
 int au9580_iccpoweroff(void *ctxt)
 {
     uint8_t cmd[]    = { 0x63, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-    uint8_t rsp[11]  = {0};
+    uint8_t rsp[64]  = {0};
     CONTEXT *context = (CONTEXT*)ctxt;
     if (!context) return -1;
 
-    if (send_command(context->fd, cmd, sizeof(cmd), &context->seq, rsp, sizeof(rsp), 100) == -1) {
+    if (send_command(context->fd, cmd, sizeof(cmd), &context->seq, rsp, sizeof(rsp), 200) == -1) {
         printf("failed to send command %02x !\n", cmd[0]);
         return -1;
     }
@@ -192,21 +261,19 @@ int au9580_iccpoweroff(void *ctxt)
     return 0;
 }
 
-int au9580_apdu(void *ctxt, uint8_t *apdu, int alen, uint8_t *rsp, int rlen)
+int au9580_xfrblock(void *ctxt, uint8_t *block, int blklen, uint8_t *rsp, int rlen)
 {
-    uint8_t cmd[267] = { 0x6f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x88, 0x00, 0x00 };
+    uint8_t cmd[267] = { 0x6f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00 };
     CONTEXT *context = (CONTEXT*)ctxt;
     if (!context) return -1;
 
-    cmd[1] = (alen >> 0) & 0xff;
-    cmd[2] = (alen >> 8) & 0xff;
-    cmd[3] = (alen >>16) & 0xff;
-    cmd[4] = (alen >>24) & 0xff;
-    cmd[8] = (rlen >> 0) & 0xff;
-    cmd[9] = (rlen >> 8) & 0xff;
-    memcpy(cmd + 10, rsp, alen);
+    cmd[1] = (blklen >> 0) & 0xff;
+    cmd[2] = (blklen >> 8) & 0xff;
+    cmd[3] = (blklen >>16) & 0xff;
+    cmd[4] = (blklen >>24) & 0xff;
+    memcpy(cmd + 10, block, blklen);
 
-    if (send_command(context->fd, cmd, 11 + alen, &context->seq, rsp, rlen, 200) == -1) {
+    if (send_command(context->fd, cmd, 11 + blklen, &context->seq, rsp, rlen, 200) == -1) {
         printf("failed to send command %02x !\n", cmd[0]);
         return -1;
     }
@@ -220,19 +287,25 @@ int main(void)
     int   ret     = 0;
     int   present = 0;
     uint8_t init_apdu_cmd[]   = { 0x90, 0x30, 0x00, 0x00, 0x00 };
-    uint8_t init_apdu_rsp[50] = { 0x00 };
+    uint8_t init_apdu_rsp[128]= { 0x00 };
 
     while (1) {
         ret = au9580_slotstatus(bcas, &present);
-        printf("ret: %d, present: %d\n", ret, present);
+        printf("ret: %d, card present: %d\n\n", ret, present);
         if (ret == 0 && present == 1) break;
         sleep(1);
     }
 
-    au9580_iccpoweron (bcas);
-    au9580_apdu(bcas, init_apdu_cmd, sizeof(init_apdu_cmd), init_apdu_rsp, sizeof(init_apdu_rsp));
+    ret = au9580_iccpoweron(bcas);
+    if (ret != 0) {
+        printf("au9580_iccpoweron failed !\n");
+        goto exit;
+    }
+
+    au9580_xfrblock(bcas, init_apdu_cmd, sizeof(init_apdu_cmd), init_apdu_rsp, sizeof(init_apdu_rsp));
     au9580_iccpoweroff(bcas);
 
+exit:
     au9580_close(bcas);
     return 0;
 }
