@@ -170,7 +170,7 @@ static int send_command(int fd, uint8_t *cmd, int clen, uint8_t *seq, uint8_t *r
 
     rlen = get_response(fd, rsp, rlen, timeout);
     if (rlen < 0) {
-        printf("get_response failed, rlen: %d%d\n", rlen);
+        printf("get_response failed, rlen: %d\n", rlen);
         return -1;
     }
 
