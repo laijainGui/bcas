@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <termios.h>
+#include <signal.h>
 #include <errno.h>
 
 // 内部常量定义
@@ -55,18 +56,39 @@ static int open_serial_port(char *dev)
     return fd;
 }
 
+static int g_fd = -1;
+
+void sig_handler(int sig)
+{
+    if (g_fd != -1) {
+        close(g_fd);
+        g_fd = -1;
+    }
+}
+
 int main(void)
 {
     #define SERIAL_PORT  "/dev/ttyS3"
-    int fd = open_serial_port(SERIAL_PORT);
-    if (fd < 0) {
+    g_fd = open_serial_port(SERIAL_PORT);
+    if (g_fd < 0) {
         printf("failed to open serial port %s !\n", SERIAL_PORT);
         exit(1);
     }
 
-    read(fd, NULL, 0);
-    while (1) sleep(-1);
-    close(fd);
+    signal(SIGINT , sig_handler);
+    signal(SIGTERM, sig_handler);
+
+    // read
+    read(g_fd, NULL, 0);
+
+    // pause
+    pause();
+
+    // close
+    if (g_fd != -1) {
+        close(g_fd);
+        g_fd = -1;
+    }
 
     return 0;
 }
