@@ -83,6 +83,7 @@ int main(void)
         printf("bcasd read+\n");
         read(g_fd, NULL, 0);
         printf("bcasd read-\n");
+        usleep(2000000);
     }
 
     // close
