@@ -78,11 +78,12 @@ int main(void)
     signal(SIGINT , sig_handler);
     signal(SIGTERM, sig_handler);
 
-    // read
-    read(g_fd, NULL, 0);
-
-    // pause
-    pause();
+    while (1) {
+        // read
+        printf("bcasd read+\n");
+        read(g_fd, NULL, 0);
+        printf("bcasd read-\n");
+    }
 
     // close
     if (g_fd != -1) {
